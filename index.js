@@ -1,0 +1,385 @@
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import morgan from "morgan";
+import rateLimit from "express-rate-limit";
+import dotenv from "dotenv";
+import jwt from "jsonwebtoken";
+import { createClient } from "@supabase/supabase-js";
+
+// Load environment variables
+dotenv.config();
+
+// Validate environment variables
+const validateEnv = () => {
+  const required = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY", "JWT_SECRET"];
+
+  const missing = required.filter((key) => !process.env[key]);
+
+  if (missing.length > 0) {
+    console.error("Missing required environment variables:", missing);
+    process.exit(1);
+  }
+};
+
+validateEnv();
+
+// Initialize Express app
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// Initialize Supabase client
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  console.error(
+    "Missing Supabase configuration. Please check your environment variables."
+  );
+  process.exit(1);
+}
+
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Middleware
+app.use(helmet());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:8080",
+    credentials: true,
+  })
+);
+app.use(morgan("combined"));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true }));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
+  message: "Too many requests from this IP, please try again later.",
+});
+app.use("/api/", limiter);
+
+// Health check endpoint
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "OK",
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || "development",
+  });
+});
+
+// API Routes
+app.get("/api/products", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .eq("in_stock", true)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching products:", error);
+    res.status(500).json({ error: "Failed to fetch products" });
+  }
+});
+
+app.get("/api/products/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching product:", error);
+    res.status(500).json({ error: "Failed to fetch product" });
+  }
+});
+
+// Categories endpoints
+app.get("/api/categories", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("categories")
+      .select("*")
+      .order("name", { ascending: true });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching categories:", error);
+    res.status(500).json({ error: "Failed to fetch categories" });
+  }
+});
+
+app.get("/api/categories/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabase
+      .from("categories")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching category:", error);
+    res.status(500).json({ error: "Failed to fetch category" });
+  }
+});
+
+// Authentication middleware
+const authenticateToken = async (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "Access token required" });
+  }
+
+  try {
+    // Verify JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(403).json({ error: "Invalid or expired token" });
+  }
+};
+
+// Auth routes
+app.post("/api/auth/signup", async (req, res) => {
+  try {
+    const { email, password, fullName, phone, role = "customer" } = req.body;
+
+    console.log(`Starting signup process for email: ${email}`);
+
+    if (!email || !password || !fullName) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        details: "Email, password, and full name are required",
+      });
+    }
+
+    // Use standard auth signup instead of admin API
+    const { data: authData, error: authError } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          full_name: fullName,
+          phone: phone,
+          role: role,
+        },
+      },
+    });
+
+    if (authError) {
+      console.error("Auth signup error:", authError);
+      return res.status(400).json({
+        error: "Auth signup failed",
+        details: authError.message,
+      });
+    }
+
+    if (!authData?.user) {
+      console.error("No user data returned from auth signup");
+      return res.status(500).json({
+        error: "User creation failed",
+        details: "No user data returned",
+      });
+    }
+
+    // Create user profile
+    const { error: profileError } = await supabase.from("users").insert({
+      id: authData.user.id,
+      email: authData.user.email,
+      full_name: fullName,
+      phone: phone,
+      role: role,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+
+    if (profileError) {
+      console.error("Profile creation error:", profileError);
+      return res.status(500).json({
+        error: "Profile creation failed",
+        details: profileError.message,
+      });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      {
+        userId: authData.user.id,
+        email: authData.user.email,
+        role: role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN }
+    );
+
+    console.log("Signup successful for:", email);
+    res.status(201).json({
+      message: "Signup successful. Please check your email for verification.",
+      user: {
+        id: authData.user.id,
+        email: authData.user.email,
+        role: role,
+      },
+      token,
+    });
+  } catch (error) {
+    console.error("Unexpected error during signup:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      details: error.message,
+    });
+  }
+});
+
+app.post("/api/auth/signin", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      {
+        userId: data.user.id,
+        email: data.user.email,
+        role: data.user.user_metadata?.role || "customer",
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    res.json({
+      message: "Login successful",
+      token,
+      user: data.user,
+    });
+  } catch (error) {
+    console.error("Signin error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/auth/signout", async (req, res) => {
+  try {
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ message: "Signout successful" });
+  } catch (error) {
+    console.error("Signout error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${process.env.FRONTEND_URL}/auth/reset-password`,
+    });
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json({ message: "Password reset email sent" });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Protected routes
+app.get("/api/auth/profile", authenticateToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", req.user.userId)
+      .single();
+
+    if (error) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json(data);
+  } catch (error) {
+    console.error("Profile error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.put("/api/auth/profile", authenticateToken, async (req, res) => {
+  try {
+    const { fullName, phone, avatarUrl } = req.body;
+
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        full_name: fullName,
+        phone: phone,
+        avatar_url: avatarUrl,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", req.user.userId)
+      .select()
+      .single();
+
+    if (error) {
+      return res.status(400).json({ error: error.message });
+    }
+
+    res.json(data);
+  } catch (error) {
+    console.error("Update profile error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ error: "Something went wrong!" });
+});
+
+// 404 handler
+app.use("*", (req, res) => {
+  res.status(404).json({ error: "Route not found" });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📊 Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+});
+
+export default app;
