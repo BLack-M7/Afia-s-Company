@@ -161,8 +161,6 @@ app.post("/api/auth/signup", async (req, res) => {
   try {
     const { email, password, fullName, phone, role = "customer" } = req.body;
 
-    console.log(`Starting signup process for email: ${email}`);
-
     if (!email || !password || !fullName) {
       return res.status(400).json({
         error: "Missing required fields",
@@ -170,16 +168,16 @@ app.post("/api/auth/signup", async (req, res) => {
       });
     }
 
-    // Use standard auth signup instead of admin API
     const { data: authData, error: authError } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: {
           full_name: fullName,
-          phone: phone,
+          phone: phone || null,
           role: role,
         },
+        emailRedirectTo: `${process.env.FRONTEND_URL || 'http://localhost:8080'}/auth/customer/login`,
       },
     });
 
@@ -195,27 +193,62 @@ app.post("/api/auth/signup", async (req, res) => {
       console.error("No user data returned from auth signup");
       return res.status(500).json({
         error: "User creation failed",
-        details: "No user data returned",
+        details: "No user data returned. This may happen if email confirmation is required.",
       });
     }
 
-    // Create user profile
-    const { error: profileError } = await supabase.from("users").insert({
-      id: authData.user.id,
-      email: authData.user.email,
-      full_name: fullName,
-      phone: phone,
-      role: role,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    // Wait for database trigger to create user profile
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    
+    // Verify profile was created by trigger, create manually if needed
+    let userProfile;
+    
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", authData.user.id)
+        .single();
+      
+      if (result.data) {
+        userProfile = result.data;
+        break;
+      }
+      
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    }
 
-    if (profileError) {
-      console.error("Profile creation error:", profileError);
-      return res.status(500).json({
-        error: "Profile creation failed",
-        details: profileError.message,
-      });
+    // Fallback: create profile manually if trigger didn't create it
+    if (!userProfile) {
+      const { data: createdProfile, error: createError } = await supabase
+        .from("users")
+        .insert({
+          id: authData.user.id,
+          email: authData.user.email,
+          full_name: fullName,
+          phone: phone || null,
+          role: role,
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        // Ignore duplicate key errors (trigger created it)
+        if (createError.code !== '23505' && !createError.message?.includes('duplicate')) {
+          console.error("Profile creation error:", createError);
+        }
+        // Try to fetch profile one more time
+        const retryResult = await supabase
+          .from("users")
+          .select("*")
+          .eq("id", authData.user.id)
+          .single();
+        userProfile = retryResult.data;
+      } else {
+        userProfile = createdProfile;
+      }
     }
 
     // Generate JWT token
@@ -226,10 +259,9 @@ app.post("/api/auth/signup", async (req, res) => {
         role: role,
       },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
+      { expiresIn: process.env.JWT_EXPIRES_IN || "24h" }
     );
 
-    console.log("Signup successful for:", email);
     res.status(201).json({
       message: "Signup successful. Please check your email for verification.",
       user: {
