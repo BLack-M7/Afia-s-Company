@@ -37,7 +37,8 @@ CREATE TABLE public.products (
     name VARCHAR(255) NOT NULL,
     description TEXT,
     price DECIMAL(10,2) NOT NULL,
-    image_url TEXT,
+    image_url TEXT, -- Keep for backward compatibility
+    image_urls JSONB DEFAULT '[]'::jsonb, -- Array of image URLs (supports at least 5 images)
     category_id UUID REFERENCES public.categories(id),
     in_stock BOOLEAN DEFAULT true,
     stock_quantity INTEGER DEFAULT 0,

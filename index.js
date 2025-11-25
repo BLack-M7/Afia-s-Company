@@ -80,7 +80,18 @@ app.get("/api/products", async (req, res) => {
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    res.json(data);
+    
+    // Normalize image_urls to always be an array
+    const normalizedData = data.map((product) => ({
+      ...product,
+      image_urls: Array.isArray(product.image_urls) 
+        ? product.image_urls 
+        : product.image_url 
+          ? [product.image_url]
+          : [],
+    }));
+    
+    res.json(normalizedData);
   } catch (error) {
     console.error("Error fetching products:", error);
     res.status(500).json({ error: "Failed to fetch products" });
@@ -97,7 +108,18 @@ app.get("/api/products/:id", async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.json(data);
+    
+    // Normalize image_urls to always be an array
+    const normalizedData = {
+      ...data,
+      image_urls: Array.isArray(data.image_urls) 
+        ? data.image_urls 
+        : data.image_url 
+          ? [data.image_url]
+          : [],
+    };
+    
+    res.json(normalizedData);
   } catch (error) {
     console.error("Error fetching product:", error);
     res.status(500).json({ error: "Failed to fetch product" });
@@ -149,6 +171,31 @@ const authenticateToken = async (req, res, next) => {
   try {
     // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(403).json({ error: "Invalid or expired token" });
+  }
+};
+
+// Admin authentication middleware
+const authenticateAdmin = async (req, res, next) => {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "Access token required" });
+  }
+
+  try {
+    // Verify JWT token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Check if user is admin
+    if (decoded.role !== 'admin') {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    
     req.user = decoded;
     next();
   } catch (error) {
@@ -293,12 +340,32 @@ app.post("/api/auth/signin", async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
 
+    // Get user profile from public.users table
+    const { data: userProfile, error: profileError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", data.user.id)
+      .single();
+
+    if (profileError) {
+      console.error("Error fetching user profile:", profileError);
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    // Check if rider and not approved
+    if (userProfile.role === 'rider' && !userProfile.approved) {
+      return res.status(403).json({ 
+        error: "Account pending approval", 
+        details: `Your rider account is ${userProfile.approval_status}. Please wait for admin approval.`
+      });
+    }
+
     // Generate JWT token
     const token = jwt.sign(
       {
         userId: data.user.id,
         email: data.user.email,
-        role: data.user.user_metadata?.role || "customer",
+        role: userProfile.role,
       },
       process.env.JWT_SECRET,
       { expiresIn: "24h" }
@@ -307,7 +374,13 @@ app.post("/api/auth/signin", async (req, res) => {
     res.json({
       message: "Login successful",
       token,
-      user: data.user,
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        role: userProfile.role,
+        approved: userProfile.approved,
+        approval_status: userProfile.approval_status,
+      },
     });
   } catch (error) {
     console.error("Signin error:", error);
@@ -393,6 +466,124 @@ app.put("/api/auth/profile", authenticateToken, async (req, res) => {
   } catch (error) {
     console.error("Update profile error:", error);
     res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Admin routes - Rider Management
+app.get("/api/admin/riders", authenticateAdmin, async (req, res) => {
+  try {
+    const { status } = req.query;
+    
+    let query = supabase
+      .from("users")
+      .select("*")
+      .eq("role", "rider")
+      .order("created_at", { ascending: false });
+
+    // Filter by approval status if provided
+    if (status) {
+      query = query.eq("approval_status", status);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching riders:", error);
+    res.status(500).json({ error: "Failed to fetch riders" });
+  }
+});
+
+app.get("/api/admin/riders/:id", authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", id)
+      .eq("role", "rider")
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching rider:", error);
+    res.status(500).json({ error: "Failed to fetch rider" });
+  }
+});
+
+app.put("/api/admin/riders/:id/approve", authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        approved: true,
+        approval_status: "approved",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("role", "rider")
+      .select()
+      .single();
+
+    if (error) throw error;
+    
+    res.json({
+      message: "Rider approved successfully",
+      rider: data,
+    });
+  } catch (error) {
+    console.error("Error approving rider:", error);
+    res.status(500).json({ error: "Failed to approve rider" });
+  }
+});
+
+app.put("/api/admin/riders/:id/reject", authenticateAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    
+    const { data, error } = await supabase
+      .from("users")
+      .update({
+        approved: false,
+        approval_status: "rejected",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", id)
+      .eq("role", "rider")
+      .select()
+      .single();
+
+    if (error) throw error;
+    
+    res.json({
+      message: "Rider rejected",
+      rider: data,
+    });
+  } catch (error) {
+    console.error("Error rejecting rider:", error);
+    res.status(500).json({ error: "Failed to reject rider" });
+  }
+});
+
+// Get all users (admin only)
+app.get("/api/admin/users", authenticateAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ error: "Failed to fetch users" });
   }
 });
 
