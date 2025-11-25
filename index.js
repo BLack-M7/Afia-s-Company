@@ -80,17 +80,17 @@ app.get("/api/products", async (req, res) => {
       .order("created_at", { ascending: false });
 
     if (error) throw error;
-    
+
     // Normalize image_urls to always be an array
     const normalizedData = data.map((product) => ({
       ...product,
-      image_urls: Array.isArray(product.image_urls) 
-        ? product.image_urls 
-        : product.image_url 
-          ? [product.image_url]
-          : [],
+      image_urls: Array.isArray(product.image_urls)
+        ? product.image_urls
+        : product.image_url
+        ? [product.image_url]
+        : [],
     }));
-    
+
     res.json(normalizedData);
   } catch (error) {
     console.error("Error fetching products:", error);
@@ -108,17 +108,17 @@ app.get("/api/products/:id", async (req, res) => {
       .single();
 
     if (error) throw error;
-    
+
     // Normalize image_urls to always be an array
     const normalizedData = {
       ...data,
-      image_urls: Array.isArray(data.image_urls) 
-        ? data.image_urls 
-        : data.image_url 
-          ? [data.image_url]
-          : [],
+      image_urls: Array.isArray(data.image_urls)
+        ? data.image_urls
+        : data.image_url
+        ? [data.image_url]
+        : [],
     };
-    
+
     res.json(normalizedData);
   } catch (error) {
     console.error("Error fetching product:", error);
@@ -190,12 +190,12 @@ const authenticateAdmin = async (req, res, next) => {
   try {
     // Verify JWT token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
+
     // Check if user is admin
-    if (decoded.role !== 'admin') {
+    if (decoded.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
     }
-    
+
     req.user = decoded;
     next();
   } catch (error) {
@@ -224,7 +224,9 @@ app.post("/api/auth/signup", async (req, res) => {
           phone: phone || null,
           role: role,
         },
-        emailRedirectTo: `${process.env.FRONTEND_URL || 'http://localhost:8080'}/auth/customer/login`,
+        emailRedirectTo: `${
+          process.env.FRONTEND_URL || "http://localhost:8080"
+        }/auth/customer/login`,
       },
     });
 
@@ -240,28 +242,29 @@ app.post("/api/auth/signup", async (req, res) => {
       console.error("No user data returned from auth signup");
       return res.status(500).json({
         error: "User creation failed",
-        details: "No user data returned. This may happen if email confirmation is required.",
+        details:
+          "No user data returned. This may happen if email confirmation is required.",
       });
     }
 
     // Wait for database trigger to create user profile
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    
+
     // Verify profile was created by trigger, create manually if needed
     let userProfile;
-    
+
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = await supabase
         .from("users")
         .select("*")
         .eq("id", authData.user.id)
         .single();
-      
+
       if (result.data) {
         userProfile = result.data;
         break;
       }
-      
+
       if (attempt < 2) {
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
@@ -283,7 +286,10 @@ app.post("/api/auth/signup", async (req, res) => {
 
       if (createError) {
         // Ignore duplicate key errors (trigger created it)
-        if (createError.code !== '23505' && !createError.message?.includes('duplicate')) {
+        if (
+          createError.code !== "23505" &&
+          !createError.message?.includes("duplicate")
+        ) {
           console.error("Profile creation error:", createError);
         }
         // Try to fetch profile one more time
@@ -353,10 +359,10 @@ app.post("/api/auth/signin", async (req, res) => {
     }
 
     // Check if rider and not approved
-    if (userProfile.role === 'rider' && !userProfile.approved) {
-      return res.status(403).json({ 
-        error: "Account pending approval", 
-        details: `Your rider account is ${userProfile.approval_status}. Please wait for admin approval.`
+    if (userProfile.role === "rider" && !userProfile.approved) {
+      return res.status(403).json({
+        error: "Account pending approval",
+        details: `Your rider account is ${userProfile.approval_status}. Please wait for admin approval.`,
       });
     }
 
@@ -473,7 +479,7 @@ app.put("/api/auth/profile", authenticateToken, async (req, res) => {
 app.get("/api/admin/riders", authenticateAdmin, async (req, res) => {
   try {
     const { status } = req.query;
-    
+
     let query = supabase
       .from("users")
       .select("*")
@@ -498,7 +504,7 @@ app.get("/api/admin/riders", authenticateAdmin, async (req, res) => {
 app.get("/api/admin/riders/:id", authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const { data, error } = await supabase
       .from("users")
       .select("*")
@@ -514,39 +520,43 @@ app.get("/api/admin/riders/:id", authenticateAdmin, async (req, res) => {
   }
 });
 
-app.put("/api/admin/riders/:id/approve", authenticateAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const { data, error } = await supabase
-      .from("users")
-      .update({
-        approved: true,
-        approval_status: "approved",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", id)
-      .eq("role", "rider")
-      .select()
-      .single();
+app.put(
+  "/api/admin/riders/:id/approve",
+  authenticateAdmin,
+  async (req, res) => {
+    try {
+      const { id } = req.params;
 
-    if (error) throw error;
-    
-    res.json({
-      message: "Rider approved successfully",
-      rider: data,
-    });
-  } catch (error) {
-    console.error("Error approving rider:", error);
-    res.status(500).json({ error: "Failed to approve rider" });
+      const { data, error } = await supabase
+        .from("users")
+        .update({
+          approved: true,
+          approval_status: "approved",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", id)
+        .eq("role", "rider")
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      res.json({
+        message: "Rider approved successfully",
+        rider: data,
+      });
+    } catch (error) {
+      console.error("Error approving rider:", error);
+      res.status(500).json({ error: "Failed to approve rider" });
+    }
   }
-});
+);
 
 app.put("/api/admin/riders/:id/reject", authenticateAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { reason } = req.body;
-    
+
     const { data, error } = await supabase
       .from("users")
       .update({
@@ -560,7 +570,7 @@ app.put("/api/admin/riders/:id/reject", authenticateAdmin, async (req, res) => {
       .single();
 
     if (error) throw error;
-    
+
     res.json({
       message: "Rider rejected",
       rider: data,
