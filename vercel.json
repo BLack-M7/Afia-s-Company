@@ -10,15 +10,15 @@
   "routes": [
     {
       "src": "/health",
-      "dest": "/index"
+      "dest": "/index.js"
     },
     {
       "src": "/api/(.*)",
-      "dest": "/index"
+      "dest": "/index.js"
     },
     {
       "src": "/(.*)",
-      "dest": "/index"
+      "dest": "/index.js"
     }
   ]
 }
