@@ -1,26 +1,24 @@
 {
-    "version": 2,
-    "name": "afia-company-backend",
-    "builds": [
-      {
-        "src": "index.js",
-        "use": "@vercel/node"
-      }
-    ],
-    "routes": [
-      {
-        "src": "/health",
-        "dest": "/index.js"
-      },
-      {
-        "src": "/api/(.*)",
-        "dest": "/index.js"
-      },
-      {
-        "src": "/(.*)",
-        "dest": "/index.js"
-      }
-    ]
-  }
-  
-  
+  "version": 2,
+  "name": "afia-company-backend",
+  "builds": [
+    {
+      "src": "index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/health",
+      "dest": "/index"
+    },
+    {
+      "src": "/api/(.*)",
+      "dest": "/index"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index"
+    }
+  ]
+}
