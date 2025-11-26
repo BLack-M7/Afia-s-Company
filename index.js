@@ -45,7 +45,7 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 app.use(helmet());
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "https://afiascompany.vercel.app",
+    origin: "https://afiascompany.vercel.app",
     credentials: true,
   })
 );
