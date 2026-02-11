@@ -44,12 +44,14 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // Middleware
 app.use(helmet());
 // CORS configuration
+// CORS configuration
 const allowedOrigins = [
   process.env.FRONTEND_URL,
   "http://localhost:8080",
   "http://localhost:5173",
-  "http://localhost:5000",
-  "https://www.afiascompany.vercel.app", // Explicitly add production URL just in case env var is missing
+  "https://afiascompany.vercel.app", // Production URL without www
+  "https://www.afiascompany.vercel.app", // Production URL with www
+  "https://afia-s-company.vercel.app", // Backend URL (self)
 ].filter(Boolean);
 
 app.use(
