@@ -449,6 +449,81 @@ app.post("/api/auth/reset-password", async (req, res) => {
   }
 });
 
+app.post("/api/auth/google", async (req, res) => {
+  try {
+    const { session } = req.body;
+
+    if (!session || !session.user) {
+      return res.status(400).json({ error: "Invalid session" });
+    }
+
+    const { user } = session;
+
+    // Check if user exists in public.users
+    let userProfile;
+    const { data: existingUser, error: fetchError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+
+    if (fetchError && fetchError.code !== "PGRST116") {
+      console.error("Error fetching user:", fetchError);
+      return res.status(500).json({ error: "Database error" });
+    }
+
+    if (existingUser) {
+      userProfile = existingUser;
+    } else {
+      // Create new user
+      const { data: newUser, error: createError } = await supabase
+        .from("users")
+        .insert({
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata?.full_name || user.email.split("@")[0],
+          avatar_url: user.user_metadata?.avatar_url,
+          role: "customer",
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        console.error("Error creating user:", createError);
+        return res.status(500).json({ error: "Failed to create user" });
+      }
+
+      userProfile = newUser;
+    }
+
+    // Generate App JWT
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        email: user.email,
+        role: userProfile.role,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "24h" }
+    );
+
+    res.json({
+      message: "Google login successful",
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        role: userProfile.role,
+        fullName: userProfile.full_name,
+        avatarUrl: userProfile.avatar_url,
+      },
+    });
+  } catch (error) {
+    console.error("Google auth error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Protected routes
 app.get("/api/auth/profile", authenticateToken, async (req, res) => {
   try {
@@ -601,6 +676,8 @@ app.put("/api/admin/riders/:id/reject", authenticateAdmin, async (req, res) => {
     res.status(500).json({ error: "Failed to reject rider" });
   }
 });
+
+
 
 // Get all users (admin only)
 app.get("/api/admin/users", authenticateAdmin, async (req, res) => {
