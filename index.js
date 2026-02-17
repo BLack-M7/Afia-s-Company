@@ -293,6 +293,8 @@ app.post("/api/auth/signup", async (req, res) => {
 
     // Fallback: create profile manually if trigger didn't create it
     if (!userProfile) {
+      console.log("Trigger failed to create profile, attempting manual creation for:", authData.user.id);
+      
       const { data: createdProfile, error: createError } = await supabase
         .from("users")
         .insert({
@@ -306,21 +308,30 @@ app.post("/api/auth/signup", async (req, res) => {
         .single();
 
       if (createError) {
-        // Ignore duplicate key errors (trigger created it)
+        // Ignore duplicate key errors (trigger created it in race condition)
         if (
-          createError.code !== "23505" &&
-          !createError.message?.includes("duplicate")
+          createError.code === "23505" ||
+          createError.message?.includes("duplicate")
         ) {
-          console.error("Profile creation error:", createError);
+          console.log("Profile already exists (likely created by trigger).");
+        } else {
+          console.error("Manual profile creation failed:", createError);
         }
+        
         // Try to fetch profile one more time
         const retryResult = await supabase
           .from("users")
           .select("*")
           .eq("id", authData.user.id)
           .single();
-        userProfile = retryResult.data;
+          
+        if (retryResult.data) {
+           userProfile = retryResult.data;
+        } else {
+           console.error("CRITICAL: Failed to verify user profile existence after signup.");
+        }
       } else {
+        console.log("Manual profile creation successful.");
         userProfile = createdProfile;
       }
     }
@@ -476,24 +487,35 @@ app.post("/api/auth/google", async (req, res) => {
       userProfile = existingUser;
     } else {
       // Create new user
+      console.log("Creating new user profile for Google user:", user.id);
+      
       const { data: newUser, error: createError } = await supabase
         .from("users")
         .insert({
           id: user.id,
           email: user.email,
-          full_name: user.user_metadata?.full_name || user.email.split("@")[0],
-          avatar_url: user.user_metadata?.avatar_url,
+          full_name: user.user_metadata?.full_name || user.user_metadata?.name || user.email.split("@")[0],
+          avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture,
           role: "customer",
         })
         .select()
         .single();
 
       if (createError) {
-        console.error("Error creating user:", createError);
-        return res.status(500).json({ error: "Failed to create user" });
+        if (createError.code === "23505") { // Duplicate key
+             const { data: retryUser } = await supabase
+              .from("users")
+              .select("*")
+              .eq("id", user.id)
+              .single();
+             userProfile = retryUser;
+        } else {
+            console.error("Error creating user profile during Google auth:", createError);
+            return res.status(500).json({ error: "Failed to create user profile" });
+        }
+      } else {
+        userProfile = newUser;
       }
-
-      userProfile = newUser;
     }
 
     // Generate App JWT
